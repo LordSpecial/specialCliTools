@@ -1,8 +1,7 @@
 #!/bin/bash
 
 # Import colors and git helpers
-source scripts/utils/colors.py
-source scripts/utils/git_helpers.py
+source "$(dirname "$0")/scripts/utils/shell_colors.sh"
 
 print_header() {
     echo -e "${BG}${FG}"

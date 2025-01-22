@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Import colors
-source scripts/utils/colors.py
+source "$(dirname "$0")/scripts/utils/shell_colors.sh"
 
 print_header() {
     echo -e "${BG}${FG}"
