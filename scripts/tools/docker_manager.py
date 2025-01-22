@@ -62,9 +62,9 @@ class DockerContainerManager:
             1: ("Stop Container", container.stop),
             2: ("Restart Container", container.restart),
             3: ("Show Logs", lambda: console.print(container.logs().decode())),
-            4: ("Show Stats", self.show_stats),
-            5: ("Execute Command", self.execute_command),
-            6: ("Show Container Info", self.show_container_info),
+            4: ("Show Stats", lambda: self.show_stats(container)),
+            5: ("Execute Command", lambda: self.execute_command(container)),
+            6: ("Show Container Info", lambda: self.show_container_info(container)),
             7: ("Back to Container List", lambda: None)
         }
 
@@ -73,15 +73,15 @@ class DockerContainerManager:
                 f"Container: {container.name}",
                 style="title"
             ))
-            
+
             for num, (action, _) in actions.items():
                 console.print(f"[info]{num}.[/] [data]{action}[/]")
 
-           try:
+            try:
                 choice = input("\nSelect action (1-7): ")
                 if not choice.strip():
                     continue
-                    
+
                 choice = int(choice)
                 if choice not in actions:
                     console.print("[error]Invalid choice. Please try again.[/]")
@@ -91,10 +91,9 @@ class DockerContainerManager:
                     break
 
                 action_name, action_func = actions[choice]
-                if choice in [4, 5]:
-                    action_func(container)
-                else:
-                    action_func()
+                action_func()
+
+                if choice in [1, 2]:
                     console.print(f"[success]\n{action_name} completed successfully.[/]")
 
             except ValueError:
@@ -109,41 +108,89 @@ class DockerContainerManager:
 
     def show_stats(self, container):
         """Display container resource usage statistics."""
-        stats = container.stats(stream=False)
-        
-        # CPU usage calculation
-        cpu_delta = stats["cpu_stats"]["cpu_usage"]["total_usage"] - \
-                   stats["precpu_stats"]["cpu_usage"]["total_usage"]
-        system_delta = stats["cpu_stats"]["system_cpu_usage"] - \
-                      stats["precpu_stats"]["system_cpu_usage"]
-        cpu_percent = (cpu_delta / system_delta) * 100 * len(stats["cpu_stats"]["cpu_usage"]["percpu_usage"])
+        try:
+            stats = container.stats(stream=False)
 
-        # Memory usage calculation
-        memory_usage = stats["memory_stats"]["usage"] / (1024 * 1024)  # Convert to MB
-        memory_limit = stats["memory_stats"]["limit"] / (1024 * 1024)  # Convert to MB
-        memory_percent = (memory_usage / memory_limit) * 100
+            table = Table(show_header=True, header_style="header", title="Container Statistics")
+            table.add_column("Metric", style="info")
+            table.add_column("Value", style="data")
 
-        # Network calculations
-        rx_bytes = stats['networks']['eth0']['rx_bytes']
-        tx_bytes = stats['networks']['eth0']['tx_bytes']
+            # CPU Usage calculation with safety checks
+            try:
+                cpu_stats = stats.get("cpu_stats", {})
+                precpu_stats = stats.get("precpu_stats", {})
 
-        table = Table(show_header=True, header_style="header", title="Container Statistics")
-        table.add_column("Metric", style="info")
-        table.add_column("Value", style="data")
+                cpu_usage = cpu_stats.get("cpu_usage", {})
+                precpu_usage = precpu_stats.get("cpu_usage", {})
 
-        table.add_row("CPU Usage", f"{cpu_percent:.2f}%")
-        table.add_row(
-            "Memory Usage", 
-            f"{memory_usage:.1f}MB / {memory_limit:.1f}MB ({memory_percent:.1f}%)"
-        )
-        table.add_row(
-            "Network I/O", 
-            f"↓ {self._format_bytes(rx_bytes)} ↑ {self._format_bytes(tx_bytes)}"
-        )
+                cpu_delta = cpu_usage.get("total_usage", 0) - precpu_usage.get("total_usage", 0)
+                system_delta = cpu_stats.get("system_cpu_usage", 0) - precpu_stats.get("system_cpu_usage", 0)
 
-        console.print("\n")
-        console.print(table)
-        console.print("\n")
+                # Get number of CPUs
+                num_cpus = len(cpu_usage.get("percpu_usage", [])) if cpu_usage.get("percpu_usage") else 1
+
+                if system_delta > 0:
+                    cpu_percent = (cpu_delta / system_delta) * 100.0 * num_cpus
+                else:
+                    cpu_percent = 0.0
+
+                table.add_row("CPU Usage", f"{cpu_percent:.2f}%")
+            except Exception as e:
+                table.add_row("CPU Usage", "N/A (Error calculating CPU usage)")
+
+            # Memory Usage calculation with safety checks
+            try:
+                memory_stats = stats.get("memory_stats", {})
+                memory_usage = memory_stats.get("usage", 0) / (1024 * 1024)  # Convert to MB
+                memory_limit = memory_stats.get("limit", 0) / (1024 * 1024)  # Convert to MB
+
+                if memory_limit > 0:
+                    memory_percent = (memory_usage / memory_limit) * 100
+                else:
+                    memory_percent = 0.0
+
+                table.add_row(
+                    "Memory Usage",
+                    f"{memory_usage:.1f}MB / {memory_limit:.1f}MB ({memory_percent:.1f}%)"
+                )
+            except Exception as e:
+                table.add_row("Memory Usage", "N/A (Error calculating memory usage)")
+
+            # Network calculations with safety checks
+            try:
+                networks = stats.get("networks", {})
+                if "eth0" in networks:
+                    rx_bytes = networks["eth0"].get("rx_bytes", 0)
+                    tx_bytes = networks["eth0"].get("tx_bytes", 0)
+                    table.add_row(
+                        "Network I/O",
+                        f"↓ {self._format_bytes(rx_bytes)} ↑ {self._format_bytes(tx_bytes)}"
+                    )
+                else:
+                    # Try to get the first available network interface
+                    first_interface = next(iter(networks.values()), {})
+                    rx_bytes = first_interface.get("rx_bytes", 0)
+                    tx_bytes = first_interface.get("tx_bytes", 0)
+                    table.add_row(
+                        "Network I/O",
+                        f"↓ {self._format_bytes(rx_bytes)} ↑ {self._format_bytes(tx_bytes)}"
+                    )
+            except Exception as e:
+                table.add_row("Network I/O", "N/A (Error calculating network I/O)")
+
+            console.print("\n")
+            console.print(table)
+            console.print("\n")
+
+        except Exception as e:
+            console.print(f"[error]Error showing container stats: {str(e)}[/]")
+
+            # Debug information
+            console.print("[info]Available stats keys:[/]")
+            try:
+                console.print(", ".join(stats.keys()))
+            except:
+                console.print("[error]Could not access stats keys[/]")
 
     def execute_command(self, container):
         """Execute a command inside the container."""
@@ -160,6 +207,7 @@ class DockerContainerManager:
 
     def show_container_info(self, container):
         """Display detailed container information."""
+        console.print("IS this working?")
         info = container.attrs
         
         table = Table(show_header=True, header_style="header", title="Container Information")
@@ -170,8 +218,30 @@ class DockerContainerManager:
         table.add_row("Name", info['Name'].lstrip('/'))
         table.add_row("Image", info['Config']['Image'])
         table.add_row("Status", info['State']['Status'])
-        table.add_row("Created", str(datetime.fromtimestamp(info['Created'])))
-        table.add_row("IP Address", info['NetworkSettings']['IPAddress'])
+	# Handle created time safely
+        created = info.get('Created')
+        if created:
+            try:
+                # Handle string timestamp
+                if isinstance(created, str):
+                    created_time = datetime.fromisoformat(created.replace('Z', '+00:00'))
+                # Handle integer timestamp
+                else:
+                    created_time = datetime.fromtimestamp(created)
+                table.add_row("Created", created_time.strftime("%Y-%m-%d %H:%M:%S"))
+            except (ValueError, TypeError):
+                table.add_row("Created", "Invalid date format")
+        else:
+            table.add_row("Created", "N/A")
+
+        # Handle IP address safely
+        network_settings = info.get('NetworkSettings', {})
+        ip_address = network_settings.get('IPAddress', '')
+        if not ip_address and network_settings.get('Networks'):
+            # Try to get IP from first network interface
+            first_network = next(iter(network_settings['Networks'].values()))
+            ip_address = first_network.get('IPAddress', 'N/A')
+        table.add_row("IP Address", ip_address or 'N/A')
 
         console.print("\n")
         console.print(table)
