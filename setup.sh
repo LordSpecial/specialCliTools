@@ -24,7 +24,18 @@ source venv/bin/activate
 
 # Install requirements
 echo -e "${BLUE}[*] Installing requirements...${NC}"
-pip install -r requirements.txt
+total_packages=$(grep -c '^[^#]' requirements.txt)
+current=0
+
+while IFS= read -r package; do
+    # Skip empty lines and comments
+    [[ -z "$package" || "$package" =~ ^#.*$ ]] && continue
+    
+    ((current++))
+    echo -ne "\r\033[K${CYAN}Installing ${package} (${current}/${total_packages})${NC}"
+    pip install "$package" >/dev/null 2>&1
+done < requirements.txt
+echo -e "\n"
 
 # Make tools executable
 echo -e "${BLUE}[*] Setting up tools...${NC}"
